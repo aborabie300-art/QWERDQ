@@ -432,7 +432,7 @@ async function handleAdminCommand(chatId, text) {
     } else if (cmd === '/setmax' || cmd === '/حدأقصى') {
       const newMax = Number(args[0]);
       if (!newMax || newMax <= 0) {
-        await sendTelegram(chatId, '❌ استخدام صحيح: /setmax <المبلغ>\nمثال: /setmax 500000');
+        await sendTelegram(chatId, '❌ استخدام صحيح: /setmax &lt;المبلغ&gt;\nمثال: /setmax 500000');
         return;
       }
       const oldMax = config.maxWithdrawalAmount;
@@ -524,7 +524,7 @@ async function handleAdminCommand(chatId, text) {
         `/stats - إحصائيات كاملة\n` +
         `/run - تشغيل دورة معالجة يدوية\n\n` +
         `<b>⚙️ الإعدادات:</b>\n` +
-        `/setmax <مبلغ> - تغيير الحد الأقصى\n\n` +
+        `/setmax &lt;مبلغ&gt; - تغيير الحد الأقصى\n\n` +
         `<b>🔄 التحكم:</b>\n` +
         `/pause - إيقاف السحب التلقائي\n` +
         `/resume - استئناف السحب التلقائي\n\n` +
