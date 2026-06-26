@@ -91,20 +91,40 @@ function db() {
 
 /**
  * يرجع كل طلبات السحب اللي status بتاعها "pending"
- * هيكل البيانات المتوقع: withdrawals/{groupId}/{withdrawalId}/{amount,status,ts,walletAddress}
+ * بيدعم هيكلين:
+ *   - Flat:  withdrawals/{withdrawalId}/{amount,status,ts,walletAddress}
+ *   - Nested: withdrawals/{groupId}/{withdrawalId}/{amount,status,ts,walletAddress}
+ *
+ * بيكتشف الهيكل تلقائيًا: لو القيمة عندها "status" مباشرة → flat، غير كده → nested.
  */
 async function getPendingWithdrawals() {
   const snapshot = await db().ref('withdrawals').once('value');
   const all = snapshot.val() || {};
   const pending = [];
 
-  for (const groupId of Object.keys(all)) {
-    const group = all[groupId] || {};
-    for (const withdrawalId of Object.keys(group)) {
-      const item = group[withdrawalId];
+  for (const key of Object.keys(all)) {
+    const node = all[key] || {};
+
+    // Flat structure: withdrawals/{withdrawalId} له status مباشرة
+    if (typeof node.status === 'string') {
+      if (node.status === 'pending') {
+        pending.push({
+          groupId: null,          // مفيش groupId في الهيكل الـ flat
+          withdrawalId: key,
+          amount: node.amount,
+          walletAddress: node.walletAddress,
+          ts: node.ts,
+        });
+      }
+      continue;
+    }
+
+    // Nested structure: withdrawals/{groupId}/{withdrawalId}
+    for (const withdrawalId of Object.keys(node)) {
+      const item = node[withdrawalId];
       if (item && item.status === 'pending') {
         pending.push({
-          groupId,
+          groupId: key,
           withdrawalId,
           amount: item.amount,
           walletAddress: item.walletAddress,
@@ -120,8 +140,15 @@ async function getPendingWithdrawals() {
  * يحجز الطلب بتحويل حالته من pending لـ processing بشكل atomic
  * عشان يمنع تنفيذ نفس الطلب مرتين لو حصل تداخل بين تشغيلتين.
  */
+// بيبني الـ Firebase path بناءً على هيكل البيانات (flat أو nested)
+function withdrawalPath(groupId, withdrawalId) {
+  return groupId
+    ? `withdrawals/${groupId}/${withdrawalId}`
+    : `withdrawals/${withdrawalId}`;
+}
+
 async function claimWithdrawal(groupId, withdrawalId) {
-  const statusRef = db().ref(`withdrawals/${groupId}/${withdrawalId}/status`);
+  const statusRef = db().ref(`${withdrawalPath(groupId, withdrawalId)}/status`);
   const result = await statusRef.transaction((current) => {
     if (current === 'pending') return 'processing';
     return undefined; // إلغاء الـ transaction لو الحالة مش pending
@@ -130,7 +157,7 @@ async function claimWithdrawal(groupId, withdrawalId) {
 }
 
 async function markCompleted(groupId, withdrawalId, txHash) {
-  await db().ref(`withdrawals/${groupId}/${withdrawalId}`).update({
+  await db().ref(withdrawalPath(groupId, withdrawalId)).update({
     status: 'completed',
     txHash,
     completedAt: Date.now(),
@@ -138,7 +165,7 @@ async function markCompleted(groupId, withdrawalId, txHash) {
 }
 
 async function markFailed(groupId, withdrawalId, errorMessage) {
-  await db().ref(`withdrawals/${groupId}/${withdrawalId}`).update({
+  await db().ref(withdrawalPath(groupId, withdrawalId)).update({
     status: 'failed',
     error: String(errorMessage).slice(0, 500),
     failedAt: Date.now(),
