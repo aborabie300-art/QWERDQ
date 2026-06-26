@@ -149,11 +149,27 @@ function withdrawalPath(groupId, withdrawalId) {
 
 async function claimWithdrawal(groupId, withdrawalId) {
   const statusRef = db().ref(`${withdrawalPath(groupId, withdrawalId)}/status`);
-  const result = await statusRef.transaction((current) => {
-    if (current === 'pending') return 'processing';
-    return undefined; // إلغاء الـ transaction لو الحالة مش pending
-  });
-  return result.committed && result.snapshot.val() === 'processing';
+
+  // محاولة 1: transaction atomic
+  try {
+    const result = await statusRef.transaction((current) => {
+      logger.info(`[claim-tx] current status = ${JSON.stringify(current)}`);
+      if (current === 'pending') return 'processing';
+      return undefined;
+    });
+    logger.info(`[claim-tx] committed=${result.committed} val=${result.snapshot.val()}`);
+    if (result.committed && result.snapshot.val() === 'processing') return true;
+  } catch (txErr) {
+    logger.warn(`[claim-tx] transaction فشل (${txErr.message}) - هنجرب read+write بديل`);
+  }
+
+  // محاولة 2: read ثم set (fallback لو transaction مش مدعوم في الـ rules)
+  const snap = await statusRef.once('value');
+  const current = snap.val();
+  logger.info(`[claim-fallback] current status = ${JSON.stringify(current)}`);
+  if (current !== 'pending') return false;
+  await statusRef.set('processing');
+  return true;
 }
 
 async function markCompleted(groupId, withdrawalId, txHash) {
