@@ -1,0 +1,18 @@
+{
+  "name": "shib-auto-payout",
+  "version": "1.0.0",
+  "description": "Automatic SHIB (BEP20) withdrawal payout worker - ملف واحد فقط",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ethers": "^6.13.4",
+    "firebase-admin": "^12.7.0",
+    "node-cron": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
