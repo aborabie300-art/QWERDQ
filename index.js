@@ -43,7 +43,10 @@ const config = {
 
   // Telegram
   telegramBotToken: required('TELEGRAM_BOT_TOKEN'),
-  telegramAdminId: required('TELEGRAM_ADMIN_ID'), // Chat ID للأدمن
+  telegramAdminIds: (process.env.TELEGRAM_ADMIN_IDS || required('TELEGRAM_ADMIN_ID'))
+    .split(',')
+    .map(id => String(id.trim()))
+    .filter(Boolean), // قائمة IDs الأدمن مفصولة بفاصلة
 
   // إعدادات التشغيل والأمان
   pollCron: process.env.POLL_CRON || '* * * * *',
@@ -143,7 +146,7 @@ async function notifyAdminFailure(groupId, withdrawalId, amount, walletAddress, 
     `👛 <b>المحفظة:</b> <code>${walletAddress}</code>\n\n` +
     `❌ <b>السبب:</b> ${errorMessage}`;
 
-  await sendTelegram(config.telegramAdminId, message);
+  for (const adminId of config.telegramAdminIds) await sendTelegram(adminId, message);
 }
 
 // ============================================================
@@ -389,7 +392,7 @@ async function handleAdminCommand(chatId, text) {
   const args = text.trim().split(' ').slice(1);
 
   // التحقق من صلاحية الأدمن
-  if (String(chatId) !== String(config.telegramAdminId)) {
+  if (!config.telegramAdminIds.includes(String(chatId))) {
     await sendTelegram(chatId, '🚫 غير مصرح لك باستخدام هذا البوت.');
     return;
   }
@@ -587,7 +590,7 @@ async function main() {
   }
 
   // إرسال رسالة بدء تشغيل للأدمن
-  await sendTelegram(config.telegramAdminId,
+  for (const adminId of config.telegramAdminIds) await sendTelegram(adminId,
     `🚀 <b>تم تشغيل SHIB Auto Payout Bot</b>\n\n` +
     `🔒 DRY_RUN: ${config.dryRun ? 'مفعّل (لا إرسال فعلي)' : '❌ معطّل (إرسال حقيقي)'}\n` +
     `⏱ الجدول: ${config.pollCron}\n` +
