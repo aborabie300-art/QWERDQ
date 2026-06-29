@@ -47,6 +47,8 @@ const config = {
     .split(',')
     .map(id => String(id.trim()))
     .filter(Boolean), // قائمة IDs الأدمن مفصولة بفاصلة
+  paymentsChannelId: process.env.PAYMENTS_CHANNEL_ID || '@SHIB_Mj', // قناة المدفوعات اللي بينزل فيها اثبات السحوبات
+  botAppUrl: process.env.BOT_APP_URL || 'https://t.me/M_SHIBEARNBOT?startapp=8965HU6HOS', // رابط فتح البوت/الميني آب
 
   // إعدادات التشغيل والأمان
   pollCron: process.env.POLL_CRON || '* * * * *',
@@ -117,23 +119,168 @@ function sendTelegram(chatId, text) {
   });
 }
 
-/** بيبعت رسالة تهنئة للمستخدم بعد نجاح السحب */
+/**
+ * بيبعت صورة + caption عبر Telegram Bot API (sendPhoto)
+ * @param {string|number} chatId      - معرف المحادثة (أو @channelusername)
+ * @param {string}        photoUrl    - رابط الصورة
+ * @param {string}        caption     - نص الرسالة المرفق بالصورة (يدعم HTML)
+ * @param {object}        [replyMarkup] - inline_keyboard اختياري
+ */
+function sendTelegramPhoto(chatId, photoUrl, caption, replyMarkup) {
+  return new Promise((resolve) => {
+    const payload = {
+      chat_id: chatId,
+      photo: photoUrl,
+      caption,
+      parse_mode: 'HTML',
+    };
+    if (replyMarkup) payload.reply_markup = replyMarkup;
+    const body = JSON.stringify(payload);
+
+    const options = {
+      hostname: 'api.telegram.org',
+      path: `/bot${config.telegramBotToken}/sendPhoto`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => (data += chunk));
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (!parsed.ok) logger.warn(`[Telegram] فشل إرسال الصورة لـ ${chatId}: ${parsed.description}`);
+        } catch (_) {}
+        resolve();
+      });
+    });
+
+    req.on('error', (err) => {
+      logger.error(`[Telegram] خطأ في إرسال الصورة لـ ${chatId}:`, err.message);
+      resolve();
+    });
+
+    req.write(body);
+    req.end();
+  });
+}
+
+/** بيجيب بيانات المستخدم (username, name) من Telegram عبر getChat */
+function getTelegramChatInfo(chatId) {
+  return new Promise((resolve) => {
+    if (!chatId) { resolve(null); return; }
+    const options = {
+      hostname: 'api.telegram.org',
+      path: `/bot${config.telegramBotToken}/getChat?chat_id=${encodeURIComponent(chatId)}`,
+      method: 'GET',
+    };
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => (data += chunk));
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          resolve(parsed.ok ? parsed.result : null);
+        } catch (_) { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.end();
+  });
+}
+
+/** بيرجع تاريخ ووقت بصيغة "29 Jun 2026, 14:35 UTC" */
+function formatDateUTC(date = new Date()) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  const month = months[date.getUTCMonth()];
+  const year = date.getUTCFullYear();
+  const hh = String(date.getUTCHours()).padStart(2, '0');
+  const mm = String(date.getUTCMinutes()).padStart(2, '0');
+  return `${day} ${month} ${year}, ${hh}:${mm} UTC`;
+}
+
+// روابط وصور ثابتة لرسائل الترحيب والسحب
+const WELCOME_IMAGE_URL = 'https://res.cloudinary.com/dkqea6vpm/image/upload/v1782744816/ChatGPT_Image_Jun_29_2026_05_51_46_PM_rjgwoq.png';
+const WITHDRAWAL_SUCCESS_IMAGE_URL = 'https://res.cloudinary.com/dkqea6vpm/image/upload/v1782744816/ChatGPT_Image_Jun_29_2026_05_52_30_PM_rjklhu.png';
+const PAYMENTS_CHANNEL_URL = 'https://t.me/SHIB_Mj';
+
+/** بيبعت رسالة الترحيب للمستخدمين العاديين (غير الأدمن) */
+async function sendWelcomeMessage(chatId) {
+  const caption =
+    `🐕 <b>Welcome to SHIB Rewards!</b>\n\n` +
+    `Complete simple tasks, invite friends, and earn SHIBA every day.\n\n` +
+    `🚀 Finish tasks to collect rewards.\n` +
+    `🎁 Claim daily bonuses.\n` +
+    `👥 Invite friends for extra earnings.\n` +
+    `💸 Withdraw your SHIBA when you reach the minimum amount.\n\n` +
+    `Start earning now and grow your SHIBA balance!`;
+
+  const replyMarkup = {
+    inline_keyboard: [
+      [{ text: '📢 Payments Channel', url: PAYMENTS_CHANNEL_URL }],
+      [{ text: '🚀 Open App', url: config.botAppUrl }],
+    ],
+  };
+
+  await sendTelegramPhoto(chatId, WELCOME_IMAGE_URL, caption, replyMarkup);
+}
+
+/** بيبعت رسالة تهنئة للمستخدم بعد نجاح السحب (بالإنجليزي + صورة) */
 async function notifyUserSuccess(groupId, amount, txHash) {
   if (!groupId) return; // flat structure - مفيش user ID
   const txUrl = `https://bscscan.com/tx/${txHash}`;
   const amountFormatted = Number(amount).toLocaleString('en-US');
 
-  const message =
-    `🎉 <b>تم استلام سحبك بنجاح!</b>\n\n` +
-    `💎 <b>المبلغ:</b> ${amountFormatted} SHIB\n` +
-    `🔗 <b>رابط المعاملة:</b>\n` +
-    `<a href="${txUrl}">${txHash.slice(0, 20)}...${txHash.slice(-8)}</a>\n\n` +
-    `✅ تم تحويل العملات إلى محفظتك على شبكة BNB Smart Chain.\n` +
-    `⏱ قد يستغرق ظهور الرصيد بضع دقائق حسب ازدحام الشبكة.\n\n` +
-    `شكراً لاستخدامك خدمتنا! 🚀`;
+  const caption =
+    `🎉 <b>Withdrawal Completed Successfully!</b>\n\n` +
+    `Your SHIB withdrawal has been processed and sent to your wallet. ✅\n\n` +
+    `💎 <b>Amount:</b> ${amountFormatted} SHIB\n` +
+    `🌐 <b>Network:</b> BEP-20\n` +
+    `🔗 <b>Transaction:</b> <a href="${txUrl}">View on BscScan</a>\n\n` +
+    `⏱ It may take a few minutes to appear in your wallet depending on network congestion.\n\n` +
+    `Thank you for using SHIB Rewards! 🐕🚀`;
 
-  await sendTelegram(groupId, message);
-  logger.info(`[Telegram] تم إرسال رسالة النجاح للمستخدم ${groupId}`);
+  const replyMarkup = { inline_keyboard: [[{ text: '🔗 View Transaction', url: txUrl }]] };
+
+  await sendTelegramPhoto(groupId, WITHDRAWAL_SUCCESS_IMAGE_URL, caption, replyMarkup);
+  logger.info(`[Telegram] Sent success message to user ${groupId}`);
+}
+
+/** بيبعت إثبات السحب في قناة المدفوعات */
+async function notifyPaymentsChannel(groupId, amount, walletAddress, txHash) {
+  const txUrl = `https://bscscan.com/tx/${txHash}`;
+  const amountFormatted = Number(amount).toLocaleString('en-US');
+  const chatInfo = await getTelegramChatInfo(groupId);
+  const username = chatInfo && chatInfo.username ? `@${chatInfo.username}` : 'N/A';
+  const fullName = chatInfo
+    ? [chatInfo.first_name, chatInfo.last_name].filter(Boolean).join(' ') || 'N/A'
+    : 'N/A';
+
+  const caption =
+    `🎉 <b>Withdrawal Completed Successfully!</b>\n\n` +
+    `A new SHIB withdrawal has been processed successfully. ✅\n\n` +
+    `👤 <b>User Information</b>\n` +
+    `• User ID: <code>${groupId || 'N/A'}</code>\n` +
+    `• Username: <code>${username}</code>\n` +
+    `• Name: <code>${fullName}</code>\n\n` +
+    `💸 <b>Withdrawal Details</b>\n` +
+    `• Amount: ${amountFormatted} SHIB\n` +
+    `• Network: BEP-20\n` +
+    `• Wallet: <code>${walletAddress}</code>\n` +
+    `• Transaction ID: <code>${txHash}</code>\n` +
+    `• Status: Completed ✅\n` +
+    `• Date: ${formatDateUTC()}\n\n` +
+    `Thank you for using SHIB Rewards! 🐕🚀`;
+
+  const replyMarkup = { inline_keyboard: [[{ text: '🔗 View Transaction', url: txUrl }]] };
+
+  await sendTelegramPhoto(config.paymentsChannelId, WITHDRAWAL_SUCCESS_IMAGE_URL, caption, replyMarkup);
+  logger.info(`[Telegram] تم إرسال إثبات السحب لقناة المدفوعات (${config.paymentsChannelId})`);
 }
 
 /** بيبعت إشعار للأدمن عند فشل سحب */
@@ -145,6 +292,21 @@ async function notifyAdminFailure(groupId, withdrawalId, amount, walletAddress, 
     `💎 <b>المبلغ:</b> ${Number(amount).toLocaleString('en-US')} SHIB\n` +
     `👛 <b>المحفظة:</b> <code>${walletAddress}</code>\n\n` +
     `❌ <b>السبب:</b> ${errorMessage}`;
+
+  for (const adminId of config.telegramAdminIds) await sendTelegram(adminId, message);
+}
+
+/** بيبعت إشعار للأدمن لما السحب يتخطى الحد الأقصى - الطلب فضل pending ومحتاج تدخل يدوي */
+async function notifyAdminOverLimit(groupId, withdrawalId, amount, walletAddress) {
+  const message =
+    `⏳ <b>طلب سحب متجاوز الحد الأقصى - في حالة انتظار</b>\n\n` +
+    `👤 <b>المستخدم:</b> ${groupId || 'غير معروف'}\n` +
+    `🆔 <b>ID السحب:</b> <code>${withdrawalId}</code>\n` +
+    `💎 <b>المبلغ:</b> ${Number(amount).toLocaleString('en-US')} SHIB\n` +
+    `🔒 <b>الحد الأقصى الحالي:</b> ${config.maxWithdrawalAmount.toLocaleString('en-US')} SHIB\n` +
+    `👛 <b>المحفظة:</b> <code>${walletAddress}</code>\n\n` +
+    `⚠️ تم ترك الطلب في حالة <b>pending</b> ولن يُرفض تلقائياً.\n` +
+    `لتنفيذه: رفّع الحد الأقصى عبر /setmax أو نفّذ السحب يدوياً، أو هيتحاول تلقائياً تاني في الدورة الجاية.`;
 
   for (const adminId of config.telegramAdminIds) await sendTelegram(adminId, message);
 }
@@ -227,15 +389,27 @@ async function claimWithdrawal(groupId, withdrawalId) {
 
 async function markCompleted(groupId, withdrawalId, txHash) {
   await db().ref(withdrawalPath(groupId, withdrawalId)).update({ status: 'completed', txHash, completedAt: Date.now() });
+  notifiedOverLimitIds.delete(withdrawalId);
 }
 
 async function markFailed(groupId, withdrawalId, errorMessage) {
   await db().ref(withdrawalPath(groupId, withdrawalId)).update({ status: 'failed', error: String(errorMessage).slice(0, 500), failedAt: Date.now() });
 }
 
+/** بيرجع حالة الطلب لـ pending - بيستخدم لما المبلغ يتخطى الحد الأقصى بدل ما يترفض */
+async function revertToPending(groupId, withdrawalId) {
+  await db().ref(withdrawalPath(groupId, withdrawalId)).update({ status: 'pending' });
+}
+
+// تتبع الطلبات اللي تم تنبيه الأدمن عنها بسبب تخطي الحد الأقصى (لمنع تكرار التنبيه كل دقيقة)
+const notifiedOverLimitIds = new Set();
+
 // ============================================================
 // 5) BNB Smart Chain / SHIB transfer logic
 // ============================================================
+
+/** خطأ مخصص: المبلغ متجاوز الحد الأقصى - بيستخدم لمنع تحويل الطلب لـ failed */
+class MaxAmountExceededError extends Error {}
 
 const ERC20_ABI = [
   'function transfer(address to, uint256 amount) returns (bool)',
@@ -284,7 +458,7 @@ async function sendShib(toAddress, amountHuman) {
   const amountNumber = Number(amountHuman);
   if (!Number.isFinite(amountNumber) || amountNumber <= 0) throw new Error(`مبلغ غير صالح: ${amountHuman}`);
   if (amountNumber > config.maxWithdrawalAmount) {
-    throw new Error(`المبلغ ${amountNumber} أكبر من الحد الأقصى (${config.maxWithdrawalAmount}).`);
+    throw new MaxAmountExceededError(`المبلغ ${amountNumber} أكبر من الحد الأقصى (${config.maxWithdrawalAmount}).`);
   }
   const decimals = await getDecimals();
   const amountWei = ethers.parseUnits(amountNumber.toString(), decimals);
@@ -322,10 +496,22 @@ async function processOneWithdrawal({ groupId, withdrawalId, amount, walletAddre
     const txHash = await sendShib(walletAddress, amount);
     await markCompleted(groupId, withdrawalId, txHash);
     logger.info(`تم بنجاح ${label}. tx: ${txHash}`);
-    // إشعار المستخدم بالنجاح
+    // إشعار المستخدم بالنجاح + نشر إثبات السحب في قناة المدفوعات
     await notifyUserSuccess(groupId, amount, txHash);
+    await notifyPaymentsChannel(groupId, amount, walletAddress, txHash);
   } catch (err) {
     logger.error(`فشل السحب ${label}:`, err.message || err);
+
+    // لو السبب إن المبلغ متخطي الحد الأقصى: سيبه pending من غير ما نغير حالته لـ failed
+    if (err instanceof MaxAmountExceededError) {
+      await revertToPending(groupId, withdrawalId);
+      if (!notifiedOverLimitIds.has(withdrawalId)) {
+        notifiedOverLimitIds.add(withdrawalId);
+        await notifyAdminOverLimit(groupId, withdrawalId, amount, walletAddress);
+      }
+      return;
+    }
+
     await markFailed(groupId, withdrawalId, err.message || String(err));
     await notifyAdminFailure(groupId, withdrawalId, amount, walletAddress, err.message || String(err));
   }
@@ -391,9 +577,9 @@ async function handleAdminCommand(chatId, text) {
   const cmd = text.trim().split(' ')[0].toLowerCase();
   const args = text.trim().split(' ').slice(1);
 
-  // التحقق من صلاحية الأدمن
+  // التحقق من صلاحية الأدمن (احتياطي - الفلترة الأساسية بتحصل في pollTelegramCommands)
   if (!config.telegramAdminIds.includes(String(chatId))) {
-    await sendTelegram(chatId, '🚫 غير مصرح لك باستخدام هذا البوت.');
+    await sendWelcomeMessage(chatId);
     return;
   }
 
@@ -555,8 +741,18 @@ async function pollTelegramCommands() {
       const msg = update.message;
       if (!msg || !msg.text) continue;
       if (!msg.text.startsWith('/')) continue;
-      logger.info(`[Telegram] أمر من ${msg.chat.id}: ${msg.text}`);
-      await handleAdminCommand(msg.chat.id, msg.text);
+
+      const chatId = msg.chat.id;
+
+      // مستخدم عادي (غير أدمن) بيبعت أي أمر -> رسالة ترحيب منظمة بدل رسالة "غير مصرح"
+      if (!config.telegramAdminIds.includes(String(chatId))) {
+        logger.info(`[Telegram] أمر من مستخدم عادي ${chatId}: ${msg.text}`);
+        await sendWelcomeMessage(chatId);
+        continue;
+      }
+
+      logger.info(`[Telegram] أمر من ${chatId}: ${msg.text}`);
+      await handleAdminCommand(chatId, msg.text);
     }
   } catch (err) {
     logger.error('[Telegram Polling] خطأ:', err.message);
